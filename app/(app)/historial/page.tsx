@@ -1,0 +1,198 @@
+"use client";
+
+import { ArrowRight, Camera, Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { TopBar } from "../../components/TopBar";
+import { apiFetch } from "../../lib/api";
+import {
+  dayKey,
+  formatDayLabel,
+  formatHours,
+  formatTime,
+} from "../../lib/format";
+import { useStatus } from "../../lib/status-context";
+import type {
+  GeofenceState,
+  HistoryRecord,
+  HistoryResponse,
+} from "../../lib/types";
+
+const RANGES = [7, 15, 31];
+
+const GEO_BADGE: Partial<
+  Record<GeofenceState, { label: string; cls: string }>
+> = {
+  inside: { label: "Dentro", cls: "bg-ok/10 text-ok border-ok/25" },
+  outside: { label: "Fuera", cls: "bg-bad/10 text-bad border-bad/25" },
+  no_gps: { label: "Sin GPS", cls: "bg-warn/10 text-warn border-warn/25" },
+  recorded: { label: "GPS", cls: "bg-white/5 text-white/70 border-line" },
+};
+
+export default function HistorialPage() {
+  const { status } = useStatus();
+  const tz = status?.employee.tz;
+  const [days, setDays] = useState(7);
+  const [records, setRecords] = useState<HistoryRecord[] | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setRecords(null);
+    setError("");
+    apiFetch<HistoryResponse>("/history", {
+      body: { days },
+      signal: controller.signal,
+    })
+      .then((res) => setRecords(res.records))
+      .catch((err) => {
+        if (!controller.signal.aborted)
+          setError(err instanceof Error ? err.message : "No se pudo cargar.");
+      });
+    return () => controller.abort();
+  }, [days]);
+
+  const groups = useMemo(() => {
+    const map = new Map<string, HistoryRecord[]>();
+    for (const r of records ?? []) {
+      const key = dayKey(r.check_in, tz);
+      map.set(key, [...(map.get(key) ?? []), r]);
+    }
+    return [...map.entries()].map(([key, items]) => ({
+      key,
+      label: formatDayLabel(items[0].check_in, tz),
+      items,
+      total: items.reduce((sum, r) => sum + (r.worked_hours || 0), 0),
+    }));
+  }, [records, tz]);
+
+  const totalHours = groups.reduce((s, g) => s + g.total, 0);
+
+  return (
+    <>
+      <TopBar employee={status?.employee} />
+      <section className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 pt-8 pb-6 md:px-10 md:pt-12 lg:grid lg:max-w-6xl lg:grid-cols-[300px_minmax(0,1fr)] lg:items-start lg:gap-12 lg:px-12 lg:pt-14">
+        <div className="lg:sticky lg:top-14">
+          <p className="eyebrow">Tus registros</p>
+          <h1 className="mt-1.5 font-extrabold text-[28px] text-white tracking-tight md:text-[36px]">
+            Historial
+          </h1>
+
+          <div
+            className="mt-5 grid grid-cols-3 gap-1 rounded-2xl border border-line bg-ink-850 p-1"
+            role="tablist"
+          >
+            {RANGES.map((d) => (
+              <button
+                key={d}
+                type="button"
+                role="tab"
+                aria-selected={days === d}
+                onClick={() => setDays(d)}
+                className={`h-10 rounded-xl font-bold text-[12px] uppercase tracking-[0.1em] transition ${
+                  days === d
+                    ? "bg-gold-500/15 text-gold-500"
+                    : "text-muted hover:text-white"
+                }`}
+              >
+                {d} días
+              </button>
+            ))}
+          </div>
+
+          {records && records.length > 0 && (
+            <div className="mt-4 grid grid-cols-2 divide-x divide-line rounded-2xl border border-line">
+              <div className="px-4 py-3">
+                <p className="eyebrow text-[10px]">Días trabajados</p>
+                <p className="mt-1 font-extrabold text-[18px] text-white">
+                  {groups.length}
+                </p>
+              </div>
+              <div className="px-4 py-3">
+                <p className="eyebrow text-[10px]">Horas</p>
+                <p className="mt-1 font-extrabold text-[18px] text-gold-500">
+                  {formatHours(totalHours)}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-5 flex-1 lg:mt-0">
+          {error ? (
+            <p className="py-10 text-center text-sm text-bad">{error}</p>
+          ) : !records ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="size-6 animate-spin text-muted" />
+            </div>
+          ) : records.length === 0 ? (
+            <p className="py-12 text-center text-sm text-muted">
+              Sin registros en los últimos {days} días.
+            </p>
+          ) : (
+            <ol className="space-y-5">
+              {groups.map((g) => (
+                <li key={g.key} className="animate-rise">
+                  <div className="mb-2 flex items-baseline justify-between">
+                    <h2 className="font-bold text-[13px] text-white">
+                      {g.label}
+                    </h2>
+                    <span className="font-bold text-[12px] text-muted tabular-nums">
+                      {formatHours(g.total)}
+                    </span>
+                  </div>
+                  <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-ink-850/60">
+                    {g.items.map((r) => (
+                      <Row key={r.id} record={r} tz={tz} />
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function Row({ record: r, tz }: { record: HistoryRecord; tz?: string }) {
+  const badges = [r.in_geofence_state, r.out_geofence_state]
+    .map((s) => (s ? GEO_BADGE[s] : undefined))
+    .filter(
+      (b, i, arr): b is { label: string; cls: string } =>
+        Boolean(b) && arr.indexOf(b) === i,
+    );
+  return (
+    <li className="flex items-center gap-3 px-4 py-3.5">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 font-extrabold text-[16px] text-white tabular-nums">
+          {formatTime(r.check_in, tz)}
+          <ArrowRight className="size-3.5 text-subtle" />
+          {r.check_out ? (
+            formatTime(r.check_out, tz)
+          ) : (
+            <span className="font-bold text-[13px] text-ok">En curso</span>
+          )}
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          {badges.map((b) => (
+            <span
+              key={b.label}
+              className={`rounded-full border px-2 py-0.5 font-bold text-[10px] uppercase tracking-[0.08em] ${b.cls}`}
+            >
+              {b.label}
+            </span>
+          ))}
+          {(r.in_selfie || r.out_selfie) && (
+            <span className="inline-flex items-center gap-1 text-[11px] text-muted">
+              <Camera className="size-3" /> Selfie
+            </span>
+          )}
+        </div>
+      </div>
+      <span className="font-bold text-[14px] text-gold-500 tabular-nums">
+        {r.check_out ? formatHours(r.worked_hours) : "—"}
+      </span>
+    </li>
+  );
+}

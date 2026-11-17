@@ -1,0 +1,129 @@
+@import "tailwindcss";
+
+/* Paleta Wispi · XCIEN (tema oscuro único, como el diseño) */
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  --color-ink-950: #0b0c0f;
+  --color-ink-900: #131418;
+  --color-ink-850: #17181d;
+  --color-ink-800: #1c1d23;
+  --color-ink-700: #26272e;
+  --color-line: rgb(255 255 255 / 0.08);
+  --color-muted: #9b9ca4;
+  --color-subtle: #6c6d75;
+
+  --color-gold-300: #ecd075;
+  --color-gold-400: #e8c35a;
+  --color-gold-500: #e5b530;
+  --color-gold-600: #c99a26;
+  --color-gold-700: #a87d1f;
+
+  --color-ok: #3ccf8e;
+  --color-warn: #f2a93b;
+  --color-bad: #f0566a;
+
+  --animate-pulse-ring: pulse-ring 2.4s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+  --animate-rise: rise 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-sheet: sheet 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+
+  @keyframes pulse-ring {
+    0% {
+      transform: scale(1);
+      opacity: 0.55;
+    }
+    100% {
+      transform: scale(1.35);
+      opacity: 0;
+    }
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes sheet {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--color-ink-900);
+  color: #fff;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Etiquetas en mayúsculas con tracking amplio (CORREO, ENTRADA, ...) */
+.eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.gold-gradient {
+  background: linear-gradient(
+    135deg,
+    var(--color-gold-300) 0%,
+    var(--color-gold-500) 55%,
+    var(--color-gold-700) 100%
+  );
+}
+
+.btn-gold {
+  background: linear-gradient(
+    90deg,
+    var(--color-gold-400) 0%,
+    var(--color-gold-500) 60%,
+    var(--color-gold-700) 100%
+  );
+  color: #17140a;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  box-shadow: 0 10px 40px -10px rgb(229 181 48 / 0.55);
+}
+
+.field {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid var(--color-line);
+  background: rgb(255 255 255 / 0.025);
+  padding: 15px 16px 15px 46px;
+  /* 16px evita el zoom automático de iOS al enfocar */
+  font-size: 16px;
+  color: #fff;
+  transition:
+    border-color 0.2s,
+    background 0.2s;
+}
+.field::placeholder {
+  color: var(--color-subtle);
+}
+.field:focus {
+  outline: none;
+  border-color: rgb(229 181 48 / 0.6);
+  background: rgb(255 255 255 / 0.045);
+}
+
+.pb-safe {
+  padding-bottom: max(env(safe-area-inset-bottom), 0px);
+}
