@@ -31,6 +31,20 @@ npm run dev                  # http://localhost:3000
 
 Las horas se muestran en la zona horaria del empleado (`employee.tz`), no en la del celular.
 
+## Sin señal (modo offline)
+
+Para técnicos en campo sin datos. Requisito: haber abierto la app **con señal al menos una vez** después de iniciar sesión. El login siempre necesita conexión.
+
+- **La app abre sin red.** `public/sw.js` (service worker, solo en producción) guarda `/inicio`, `/historial`, `/perfil` y sus archivos. Se puede instalar en la pantalla de inicio (`app/manifest.ts`).
+- **El registro se guarda en el celular.** Si no hay red, si la petición falla por señal débil o si ya hay registros esperando (para respetar el orden), el registro va a una cola en IndexedDB (`app/lib/offline-queue.ts`) con la hora, el GPS y la selfie. El GPS funciona por satélite aunque no haya datos.
+- **La hora es la de Odoo.** Cada `/status` guarda el desfase entre el reloj de Odoo y el del celular (`app/lib/offline-cache.ts`). La hora del registro se corrige con ese desfase, así un celular con la hora mal no altera el registro.
+- **La pantalla se actualiza al momento.** El botón cambia, las tarjetas muestran la hora y el contador corre. Se ve la pastilla *Sin señal* y el aviso *N registros pendientes*.
+- **Se envía solo.** `app/lib/sync.ts` manda la cola en orden cuando vuelve la señal (evento `online`, al volver a la app y cada 30 s). Cada registro lleva un `client_uuid`, así que un reintento no lo duplica.
+- **Si Odoo lo rechaza** (más de 72 h, hora en el futuro, traslape), queda como aviso rojo para que el empleado avise a RH.
+- **Al cerrar sesión** se intenta enviar lo pendiente. Si no se puede, se pide confirmación, porque esos registros solo existen en ese celular.
+
+En Odoo quedan marcados *Sin conexión*, con la hora real de sincronización. Ver el README de `wispi_attendance`.
+
 ## Comunicación con Odoo
 
 Mismo patrón que `portal-frontend`:

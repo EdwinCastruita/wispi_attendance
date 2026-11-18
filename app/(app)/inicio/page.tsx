@@ -1,6 +1,14 @@
 "use client";
 
-import { Loader2, LogIn, LogOut, MapPin } from "lucide-react";
+import {
+  CloudOff,
+  CloudUpload,
+  Loader2,
+  LogIn,
+  LogOut,
+  MapPin,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Notice, type NoticeData } from "../../components/Notice";
 import { SelfieCamera } from "../../components/SelfieCamera";
@@ -15,13 +23,30 @@ import {
   formatTime,
   greeting,
 } from "../../lib/format";
+import { clockOffsetMs } from "../../lib/offline-cache";
+import { addToQueue, newUuid } from "../../lib/offline-queue";
 import { useStatus } from "../../lib/status-context";
 import type { PunchResponse, Status } from "../../lib/types";
 
 type Step = "idle" | "camera" | "locating" | "sending";
 
 export default function InicioPage() {
-  const { status, receivedAt, error, refresh, setStatus } = useStatus();
+  const {
+    status,
+    liveSince,
+    online,
+    pending,
+    rejected,
+    syncing,
+    syncNotice,
+    clearSyncNotice,
+    dismissRejected,
+    syncNow,
+    error,
+    refresh,
+    setStatus,
+    markOffline,
+  } = useStatus();
   const [now, setNow] = useState(() => Date.now());
   const [step, setStep] = useState<Step>("idle");
   const [notice, setNotice] = useState<NoticeData | null>(null);
@@ -38,66 +63,132 @@ export default function InicioPage() {
   const action = status?.next_action ?? "check_in";
   const busy = step !== "idle";
 
-  // Horas en vivo: lo que dijo Odoo + lo transcurrido desde entonces si sigue en turno
+  // Horas en vivo: lo que dijo Odoo (más los pendientes) + lo transcurrido en el turno abierto
   const workedHours = status
     ? status.worked_hours_today +
-      (checkedIn ? Math.max(0, now - receivedAt) / 3_600_000 : 0)
+      (liveSince ? Math.max(0, now - liveSince) / 3_600_000 : 0)
     : 0;
+
+  /** Guarda el registro en el celular para mandarlo cuando vuelva la señal. */
+  const enqueue = useCallback(
+    async (
+      uuid: string,
+      photo: string | null,
+      coords: Coords | null,
+      deviceNow: number,
+    ) => {
+      if (!status) return;
+      const offset = clockOffsetMs();
+      const clientTime = new Date(deviceNow + offset).toISOString();
+      await addToQueue({
+        uuid,
+        employee_id: status.employee.id,
+        action,
+        device_time: new Date(deviceNow).toISOString(),
+        client_time: clientTime,
+        clock_offset_s: offset / 1000,
+        latitude: coords?.latitude ?? null,
+        longitude: coords?.longitude ?? null,
+        photo,
+        status: "pending",
+        created: deviceNow,
+      });
+      const label =
+        action === "check_in" ? "Entrada guardada" : "Salida guardada";
+      setNotice({
+        type: "info",
+        sticky: true,
+        title: `${label} sin conexión · ${formatTime(clientTime, status.employee.tz)}`,
+        message:
+          "Se enviará a Odoo en cuanto recuperes señal. Abre la app cuando tengas datos y no cierres sesión.",
+      });
+    },
+    [action, status],
+  );
 
   const send = useCallback(
     async (photo: string | null) => {
       if (!status) return;
+      // La hora del registro es la del momento en que se pulsó / tomó la selfie
+      const deviceNow = Date.now();
+      const uuid = newUuid();
       setStep("locating");
       const coords = await (positionRef.current ?? Promise.resolve(null));
-      setStep("sending");
       try {
-        const res = await apiFetch<PunchResponse>("/punch", {
-          body: {
-            action,
-            latitude: coords?.latitude ?? null,
-            longitude: coords?.longitude ?? null,
-            photo,
-          },
-        });
-        setStatus(res);
-        const hour = formatTime(res.time, res.employee.tz);
-        const label =
-          res.action_done === "check_in"
-            ? "Entrada registrada"
-            : "Salida registrada";
-        setNotice(
-          res.feedback
-            ? {
-                ...res.feedback,
-                title: `${label} · ${hour}`,
-                message: `${res.feedback.title}. ${res.feedback.message}`,
-                sticky: res.feedback.type !== "success",
-              }
-            : { type: "success", title: `${label} · ${hour}` },
-        );
-      } catch (err) {
-        if (err instanceof ApiError && err.code === "state_mismatch") {
-          // Ya se había registrado (doble toque u otro dispositivo): se refresca la pantalla
-          setStatus(err.data as Status);
-          setNotice({
-            type: "info",
-            title: "Tu registro ya estaba actualizado",
-            message: err.message,
-          });
-        } else {
-          setNotice({
-            type: "danger",
-            title: "No se registró",
-            message: err instanceof Error ? err.message : "Inténtalo de nuevo.",
-            sticky: true,
-          });
+        // Sin red, o con registros anteriores aún por enviar (hay que respetar el orden)
+        if (!online || !navigator.onLine || pending.length > 0) {
+          await enqueue(uuid, photo, coords, deviceNow);
+          if (online && navigator.onLine) syncNow();
+          return;
         }
+        setStep("sending");
+        try {
+          const res = await apiFetch<PunchResponse>("/punch", {
+            body: {
+              action,
+              client_uuid: uuid,
+              latitude: coords?.latitude ?? null,
+              longitude: coords?.longitude ?? null,
+              photo,
+            },
+            timeoutMs: 20_000,
+          });
+          setStatus(res);
+          const hour = formatTime(res.time, res.employee.tz);
+          const label =
+            res.action_done === "check_in"
+              ? "Entrada registrada"
+              : "Salida registrada";
+          setNotice(
+            res.feedback
+              ? {
+                  ...res.feedback,
+                  title: `${label} · ${hour}`,
+                  message: `${res.feedback.title}. ${res.feedback.message}`,
+                  sticky: res.feedback.type !== "success",
+                }
+              : { type: "success", title: `${label} · ${hour}` },
+          );
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 0) {
+            // Se cayó la señal: se guarda con el mismo uuid. Si Odoo sí lo
+            // alcanzó a recibir, al sincronizar responde con el existente.
+            markOffline();
+            await enqueue(uuid, photo, coords, deviceNow);
+          } else if (err instanceof ApiError && err.code === "state_mismatch") {
+            // Ya se había registrado (doble toque u otro dispositivo): se refresca la pantalla
+            setStatus(err.data as Status);
+            setNotice({
+              type: "info",
+              title: "Tu registro ya estaba actualizado",
+              message: err.message,
+            });
+          } else {
+            throw err;
+          }
+        }
+      } catch (err) {
+        setNotice({
+          type: "danger",
+          title: "No se registró",
+          message: err instanceof Error ? err.message : "Inténtalo de nuevo.",
+          sticky: true,
+        });
       } finally {
         positionRef.current = null;
         setStep("idle");
       }
     },
-    [action, status, setStatus],
+    [
+      action,
+      status,
+      online,
+      pending.length,
+      enqueue,
+      syncNow,
+      setStatus,
+      markOffline,
+    ],
   );
 
   const start = () => {
@@ -245,9 +336,73 @@ export default function InicioPage() {
             <p className="eyebrow mt-8 mb-3 hidden lg:mt-0 lg:block">
               Resumen de hoy
             </p>
-            {notice && (
-              <div className="mt-5 lg:order-last lg:mt-6">
-                <Notice notice={notice} onClose={closeNotice} />
+            {(notice ||
+              syncNotice ||
+              pending.length > 0 ||
+              rejected.length > 0) && (
+              <div className="mt-5 space-y-3 lg:order-last lg:mt-6">
+                {notice && <Notice notice={notice} onClose={closeNotice} />}
+                {syncNotice && (
+                  <Notice notice={syncNotice} onClose={clearSyncNotice} />
+                )}
+
+                {pending.length > 0 && (
+                  <div className="flex items-center gap-3 rounded-2xl border border-gold-500/25 bg-gold-500/[0.07] px-4 py-3.5">
+                    <CloudUpload className="size-5 shrink-0 text-gold-500" />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-[14px] text-gold-500">
+                        {pending.length === 1
+                          ? "1 registro pendiente"
+                          : `${pending.length} registros pendientes`}{" "}
+                        de enviar
+                      </p>
+                      <p className="mt-0.5 text-[12px] text-white/65 leading-snug">
+                        {online
+                          ? "Enviando a Odoo…"
+                          : `Guardado en tu celular. Se enviará al recuperar señal (máx. ${status.offline_max_hours ?? 72} h).`}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => syncNow()}
+                      disabled={!online || syncing}
+                      className="shrink-0 rounded-xl border border-gold-500/40 px-3 py-2 font-bold text-[11px] text-gold-500 uppercase tracking-[0.12em] disabled:opacity-40"
+                    >
+                      {syncing ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        "Enviar"
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {rejected.map((r) => (
+                  <div
+                    key={r.uuid}
+                    role="alert"
+                    className="flex gap-3 rounded-2xl border border-bad/30 bg-bad/10 px-4 py-3.5"
+                  >
+                    <CloudOff className="mt-0.5 size-5 shrink-0 text-bad" />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-[14px] text-bad">
+                        {r.action === "check_in" ? "Entrada" : "Salida"} del{" "}
+                        {formatTime(r.client_time, tz)} no se aceptó
+                      </p>
+                      <p className="mt-0.5 text-[12px] text-white/75 leading-snug">
+                        {r.error} Avisa a Recursos Humanos para que la registre.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => dismissRejected(r.uuid)}
+                      aria-label="Descartar aviso"
+                      className="-m-1 self-start p-1 text-muted"
+                    >
+                      <X className="size-4" />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
 

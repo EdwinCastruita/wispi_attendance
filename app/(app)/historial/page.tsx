@@ -1,15 +1,22 @@
 "use client";
 
-import { ArrowRight, Camera, Loader2 } from "lucide-react";
+import {
+  ArrowRight,
+  Camera,
+  CloudOff,
+  CloudUpload,
+  Loader2,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { TopBar } from "../../components/TopBar";
-import { apiFetch } from "../../lib/api";
+import { ApiError, apiFetch } from "../../lib/api";
 import {
   dayKey,
   formatDayLabel,
   formatHours,
   formatTime,
 } from "../../lib/format";
+import { loadCachedHistory, saveCachedHistory } from "../../lib/offline-cache";
 import { useStatus } from "../../lib/status-context";
 import type {
   GeofenceState,
@@ -29,27 +36,45 @@ const GEO_BADGE: Partial<
 };
 
 export default function HistorialPage() {
-  const { status } = useStatus();
+  const { status, pending, online } = useStatus();
   const tz = status?.employee.tz;
   const [days, setDays] = useState(7);
   const [records, setRecords] = useState<HistoryRecord[] | null>(null);
+  const [fromCache, setFromCache] = useState(false);
   const [error, setError] = useState("");
+  // Recarga cuando se terminan de enviar los pendientes
+  const pendingCount = pending.length;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pendingCount recarga al terminar de enviar pendientes
   useEffect(() => {
     const controller = new AbortController();
-    setRecords(null);
+    const cached = loadCachedHistory(days);
+    setRecords(cached);
+    setFromCache(Boolean(cached));
     setError("");
     apiFetch<HistoryResponse>("/history", {
       body: { days },
       signal: controller.signal,
     })
-      .then((res) => setRecords(res.records))
+      .then((res) => {
+        setRecords(res.records);
+        setFromCache(false);
+        saveCachedHistory(days, res.records);
+      })
       .catch((err) => {
-        if (!controller.signal.aborted)
-          setError(err instanceof Error ? err.message : "No se pudo cargar.");
+        if (controller.signal.aborted) return;
+        if (err instanceof ApiError && err.status === 0) {
+          // Sin señal: se queda lo último que se vio
+          if (!cached)
+            setError(
+              "Sin conexión. El historial se mostrará cuando recuperes señal.",
+            );
+          return;
+        }
+        setError(err instanceof Error ? err.message : "No se pudo cargar.");
       });
     return () => controller.abort();
-  }, [days]);
+  }, [days, pendingCount]);
 
   const groups = useMemo(() => {
     const map = new Map<string, HistoryRecord[]>();
@@ -118,8 +143,49 @@ export default function HistorialPage() {
         </div>
 
         <div className="mt-5 flex-1 lg:mt-0">
+          {pending.length > 0 && (
+            <div className="mb-5 animate-rise">
+              <div className="mb-2 flex items-center gap-2">
+                <CloudUpload className="size-4 text-gold-500" />
+                <h2 className="font-bold text-[13px] text-gold-500">
+                  Pendientes de enviar
+                </h2>
+              </div>
+              <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-gold-500/25 bg-gold-500/[0.05]">
+                {pending.map((p) => (
+                  <li
+                    key={p.uuid}
+                    className="flex items-center gap-3 px-4 py-3.5"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="font-extrabold text-[16px] text-white tabular-nums">
+                        {p.action === "check_in" ? "Entrada" : "Salida"} ·{" "}
+                        {formatTime(p.client_time, tz)}
+                      </p>
+                      <p className="mt-0.5 text-[12px] text-muted">
+                        {formatDayLabel(p.client_time, tz)}
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-gold-500/30 px-2 py-0.5 font-bold text-[10px] text-gold-500 uppercase tracking-[0.08em]">
+                      Pendiente
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {fromCache && !online && (
+            <p className="mb-4 flex items-center gap-2 text-[12px] text-warn">
+              <CloudOff className="size-3.5" /> Sin conexión: mostrando lo
+              último que se cargó.
+            </p>
+          )}
           {error ? (
-            <p className="py-10 text-center text-sm text-bad">{error}</p>
+            <p
+              className={`py-10 text-center text-sm ${online ? "text-bad" : "text-muted"}`}
+            >
+              {error}
+            </p>
           ) : !records ? (
             <div className="flex justify-center py-12">
               <Loader2 className="size-6 animate-spin text-muted" />
@@ -183,6 +249,11 @@ function Row({ record: r, tz }: { record: HistoryRecord; tz?: string }) {
               {b.label}
             </span>
           ))}
+          {(r.in_offline || r.out_offline) && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-warn/25 bg-warn/10 px-2 py-0.5 font-bold text-[10px] text-warn uppercase tracking-[0.08em]">
+              <CloudOff className="size-3" /> Sin conexión
+            </span>
+          )}
           {(r.in_selfie || r.out_selfie) && (
             <span className="inline-flex items-center gap-1 text-[11px] text-muted">
               <Camera className="size-3" /> Selfie

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Brand } from "./components/Brand";
 import { Waves } from "./components/Waves";
 import { ApiError, apiFetch, saveSession } from "./lib/api";
+import { saveCachedStatus } from "./lib/offline-cache";
 import type { Status } from "./lib/types";
 
 type LoginResponse = Status & {
@@ -49,6 +50,7 @@ export default function LoginPage() {
         auth: false,
       });
       saveSession(data.session_id);
+      saveCachedStatus(data, Date.now());
       router.replace("/inicio");
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -171,6 +173,9 @@ export default function LoginPage() {
             </form>
 
             <p className="mt-7 text-center text-[12px] text-white/55">
+              Necesitas conexión para iniciar sesión. Después puedes registrar
+              aunque no tengas señal.
+              <br />
               ¿Problemas para acceder? Contacta a tu gerente de zona.
             </p>
           </div>

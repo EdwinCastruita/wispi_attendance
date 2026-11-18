@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useStatus } from "../lib/status-context";
 import { Brand } from "./Brand";
-import { Avatar } from "./TopBar";
+import { Avatar, OfflinePill } from "./TopBar";
 
 const ITEMS = [
   { href: "/inicio", label: "Inicio", Icon: Clock },
@@ -54,6 +54,9 @@ export function SideNav() {
   return (
     <aside className="sticky top-0 hidden h-dvh w-72 shrink-0 flex-col border-line border-r bg-ink-950/60 px-5 py-7 lg:flex">
       <Brand subtitle="Control de asistencia" size={36} />
+      <div className="mt-5 empty:hidden">
+        <OfflinePill />
+      </div>
       <nav className="mt-10">
         <ul className="space-y-1.5">
           {ITEMS.map(({ href, label, Icon }) => {

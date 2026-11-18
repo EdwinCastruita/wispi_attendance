@@ -25,7 +25,7 @@ export function Brand({
         </div>
       )}
       <div className="leading-tight">
-        <p className="font-black text-[13px] text-white tracking-[0.2em]">
+        <p className="whitespace-nowrap font-black text-[13px] text-white tracking-[0.2em]">
           WISPI · XCIEN
         </p>
         {subtitle && (

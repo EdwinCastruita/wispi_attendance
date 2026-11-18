@@ -40,6 +40,7 @@ export type Status = {
   gps_required: boolean;
   geofence_mode: "home" | "field" | "none";
   server_time: string;
+  offline_max_hours: number;
 };
 
 export type Feedback = {
@@ -50,6 +51,8 @@ export type Feedback = {
 
 export type PunchResponse = Status & {
   success: true;
+  duplicate: boolean;
+  offline: boolean;
   action_done: "check_in" | "check_out";
   attendance_id: number;
   time: string;
@@ -68,6 +71,8 @@ export type HistoryRecord = {
   in_selfie: boolean;
   out_selfie: boolean;
   mode: string;
+  in_offline: boolean;
+  out_offline: boolean;
 };
 
 export type HistoryResponse = {

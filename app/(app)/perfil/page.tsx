@@ -4,6 +4,8 @@ import { Loader2, LogOut } from "lucide-react";
 import { useState } from "react";
 import { Avatar, TopBar } from "../../components/TopBar";
 import { apiFetch, clearSession } from "../../lib/api";
+import { clearOfflineCache } from "../../lib/offline-cache";
+import { clearQueue, listQueue } from "../../lib/offline-queue";
 import { useStatus } from "../../lib/status-context";
 
 const GEOFENCE_LABEL = {
@@ -13,12 +15,29 @@ const GEOFENCE_LABEL = {
 };
 
 export default function PerfilPage() {
-  const { status } = useStatus();
+  const { status, pending, online, syncNow } = useStatus();
   const [leaving, setLeaving] = useState(false);
   const employee = status?.employee;
 
   const logout = async () => {
     setLeaving(true);
+    // Los registros sin conexión viven solo en este celular: se intenta
+    // enviarlos antes, y si no se puede se pide confirmación.
+    if (pending.length && online) await syncNow();
+    const left = (await listQueue()).filter(
+      (p) => p.status === "pending",
+    ).length;
+    if (
+      left &&
+      !window.confirm(
+        `Tienes ${left} registro(s) sin enviar a Odoo. Si cierras sesión se perderán. ¿Cerrar sesión de todos modos?`,
+      )
+    ) {
+      setLeaving(false);
+      return;
+    }
+    await clearQueue().catch(() => undefined);
+    clearOfflineCache();
     try {
       await apiFetch("/logout", { timeoutMs: 8_000 });
     } catch {
