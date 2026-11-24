@@ -4,10 +4,15 @@
 // marcó; `sync.ts` los manda a Odoo en orden cuando vuelve la conexión.
 // La selfie se borra del celular en cuanto Odoo confirma el registro.
 
+import type { PunchAction } from "./types";
+
 export type QueuedPunch = {
   uuid: string;
   employee_id: number;
-  action: "check_in" | "check_out";
+  action: PunchAction;
+  /** Motivo de la salida temporal (solo break_start). */
+  reason?: string | null;
+  reason_note?: string | null;
   /** Hora del reloj del celular (ISO UTC), solo informativa. */
   device_time: string;
   /** Hora corregida con el último desfase conocido contra Odoo (ISO UTC). */

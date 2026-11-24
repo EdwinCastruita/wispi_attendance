@@ -36,6 +36,8 @@ export function syncQueue(employeeId: number): Promise<SyncResult> {
         const res = await apiFetch<PunchResponse>("/punch", {
           body: {
             action: item.action,
+            reason: item.reason ?? null,
+            reason_note: item.reason_note ?? null,
             offline: true,
             client_uuid: item.uuid,
             client_time: item.client_time,

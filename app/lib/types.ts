@@ -24,12 +24,33 @@ export type Employee = {
   tz: string;
 };
 
+/** break_start / break_end: salida temporal (comida, tienda, …) y regreso, sin selfie. */
+export type PunchAction =
+  | "check_in"
+  | "check_out"
+  | "break_start"
+  | "break_end";
+
+export type AttendanceState = "checked_in" | "on_break" | "checked_out";
+
+/** Motivos de salida temporal que ofrece Odoo ("lunch" es el botón de comida). */
+export type OutReason = { value: string; label: string };
+
 export type Status = {
   employee: Employee;
-  attendance_state: "checked_in" | "checked_out";
-  next_action: "check_in" | "check_out";
+  attendance_state: AttendanceState;
+  next_action: PunchAction;
+  /** Opcionales: un estado guardado en caché por una versión anterior no los trae. */
+  allowed_actions?: PunchAction[];
   check_in: string | null;
   last_check_out: string | null;
+  /** Salida temporal en curso (solo en `on_break`). */
+  break_since?: string | null;
+  break_reason?: string | null;
+  break_reason_label?: string | null;
+  out_reasons?: OutReason[];
+  /** Registros del empleado que RH tiene por revisar (p. ej. cierre automático). */
+  pending_review?: number;
   today: {
     first_check_in: string | null;
     last_check_out: string | null;
@@ -53,7 +74,7 @@ export type PunchResponse = Status & {
   success: true;
   duplicate: boolean;
   offline: boolean;
-  action_done: "check_in" | "check_out";
+  action_done: PunchAction;
   attendance_id: number;
   time: string;
   geofence_state: GeofenceState | false;
@@ -73,6 +94,13 @@ export type HistoryRecord = {
   mode: string;
   in_offline: boolean;
   out_offline: boolean;
+  out_mode?: string | null;
+  out_reason?: string | null;
+  out_reason_label?: string | null;
+  out_reason_note?: string | null;
+  in_break_return?: boolean;
+  auto_closed?: boolean;
+  review_state?: "to_review" | "reviewed" | null;
 };
 
 export type HistoryResponse = {

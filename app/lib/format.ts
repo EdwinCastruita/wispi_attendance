@@ -113,3 +113,15 @@ export function imageDataUrl(b64: string | null | undefined) {
           : "image/png";
   return `data:${mime};base64,${b64}`;
 }
+
+const ACTION_LABELS: Record<string, string> = {
+  check_in: "Entrada",
+  check_out: "Salida",
+  break_start: "Salida temporal",
+  break_end: "Regreso",
+};
+
+/** Nombre corto de una acción de registro ("Entrada", "Salida a comer", …). */
+export function actionLabel(action: string): string {
+  return ACTION_LABELS[action] ?? "Registro";
+}
