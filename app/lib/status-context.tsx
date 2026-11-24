@@ -54,14 +54,20 @@ const StatusContext = createContext<StatusContextValue | null>(null);
 function applyPending(base: CachedStatus, items: QueuedPunch[]) {
   let s: Status = { ...base.status, today: { ...base.status.today } };
   let liveSince: number | null =
-    s.next_action === "check_out" ? base.receivedAt : null;
+    s.attendance_state === "checked_in" || s.next_action === "check_out"
+      ? base.receivedAt
+      : null;
   for (const p of items) {
     const t = Date.parse(p.client_time);
-    if (p.action === "check_in") {
+    if (p.action === "check_in" || p.action === "break_end") {
       s = {
         ...s,
         attendance_state: "checked_in",
         next_action: "check_out",
+        allowed_actions: ["check_out", "break_start"],
+        break_since: null,
+        break_reason: null,
+        break_reason_label: null,
         check_in: p.client_time,
         today: {
           ...s.today,
@@ -73,10 +79,16 @@ function applyPending(base: CachedStatus, items: QueuedPunch[]) {
       liveSince = t;
     } else {
       const add = liveSince ? Math.max(0, t - liveSince) / 3_600_000 : 0;
+      const onBreak = p.action === "break_start";
       s = {
         ...s,
-        attendance_state: "checked_out",
-        next_action: "check_in",
+        // En comida el tiempo no corre hasta registrar el regreso
+        attendance_state: onBreak ? "on_break" : "checked_out",
+        next_action: onBreak ? "break_end" : "check_in",
+        allowed_actions: onBreak ? ["break_end"] : ["check_in"],
+        break_since: onBreak ? p.client_time : null,
+        break_reason: onBreak ? (p.reason ?? null) : null,
+        break_reason_label: null,
         check_in: null,
         last_check_out: p.client_time,
         worked_hours_today: s.worked_hours_today + add,

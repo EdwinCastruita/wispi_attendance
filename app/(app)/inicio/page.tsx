@@ -1,22 +1,27 @@
 "use client";
 
 import {
+  ClipboardList,
   CloudOff,
   CloudUpload,
+  DoorOpen,
   Loader2,
   LogIn,
   LogOut,
   MapPin,
+  Utensils,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Notice, type NoticeData } from "../../components/Notice";
+import { ReasonSheet, reasonLabel } from "../../components/ReasonSheet";
 import { SelfieCamera } from "../../components/SelfieCamera";
 import { TopBar } from "../../components/TopBar";
 import { Waves } from "../../components/Waves";
 import { ApiError, apiFetch } from "../../lib/api";
 import { type Coords, getPosition } from "../../lib/device";
 import {
+  actionLabel,
   firstName,
   formatHours,
   formatLongDate,
@@ -26,9 +31,32 @@ import {
 import { clockOffsetMs } from "../../lib/offline-cache";
 import { addToQueue, newUuid } from "../../lib/offline-queue";
 import { useStatus } from "../../lib/status-context";
-import type { PunchResponse, Status } from "../../lib/types";
+import type {
+  AttendanceState,
+  PunchAction,
+  PunchResponse,
+  Status,
+} from "../../lib/types";
 
-type Step = "idle" | "camera" | "locating" | "sending";
+type Step = "idle" | "reason" | "camera" | "locating" | "sending";
+
+/** Lo que se va a registrar: la acción y, en la salida, su motivo. */
+type Intent = {
+  action: PunchAction;
+  reason?: string | null;
+  reason_note?: string | null;
+};
+
+const DONE_LABELS: Record<PunchAction, string> = {
+  check_in: "Entrada registrada",
+  check_out: "Salida registrada",
+  break_start: "Salida registrada",
+  break_end: "Regreso registrado",
+};
+
+/** Las salidas temporales y el regreso solo piden ubicación, no selfie. */
+const needsSelfie = (action: PunchAction) =>
+  action === "check_in" || action === "check_out";
 
 export default function InicioPage() {
   const {
@@ -52,6 +80,8 @@ export default function InicioPage() {
   const [notice, setNotice] = useState<NoticeData | null>(null);
   // La ubicación se pide al pulsar el botón, en paralelo con la selfie
   const positionRef = useRef<Promise<Coords | null> | null>(null);
+  // Registro en curso mientras se toma la selfie
+  const intentRef = useRef<Intent | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 15_000);
@@ -59,8 +89,17 @@ export default function InicioPage() {
   }, []);
 
   const tz = status?.employee.tz;
-  const checkedIn = status?.next_action === "check_out";
-  const action = status?.next_action ?? "check_in";
+  const state: AttendanceState =
+    status?.attendance_state ??
+    (status?.next_action === "check_out" ? "checked_in" : "checked_out");
+  const checkedIn = state === "checked_in";
+  const onBreak = state === "on_break";
+  const onLunch = onBreak && status?.break_reason === "lunch";
+  const mainAction: PunchAction = checkedIn
+    ? "check_out"
+    : onBreak
+      ? "break_end"
+      : "check_in";
   const busy = step !== "idle";
 
   // Horas en vivo: lo que dijo Odoo (más los pendientes) + lo transcurrido en el turno abierto
@@ -72,6 +111,7 @@ export default function InicioPage() {
   /** Guarda el registro en el celular para mandarlo cuando vuelva la señal. */
   const enqueue = useCallback(
     async (
+      intent: Intent,
       uuid: string,
       photo: string | null,
       coords: Coords | null,
@@ -83,7 +123,9 @@ export default function InicioPage() {
       await addToQueue({
         uuid,
         employee_id: status.employee.id,
-        action,
+        action: intent.action,
+        reason: intent.reason ?? null,
+        reason_note: intent.reason_note ?? null,
         device_time: new Date(deviceNow).toISOString(),
         client_time: clientTime,
         clock_offset_s: offset / 1000,
@@ -93,21 +135,19 @@ export default function InicioPage() {
         status: "pending",
         created: deviceNow,
       });
-      const label =
-        action === "check_in" ? "Entrada guardada" : "Salida guardada";
       setNotice({
         type: "info",
         sticky: true,
-        title: `${label} sin conexión · ${formatTime(clientTime, status.employee.tz)}`,
+        title: `${actionLabel(intent.action)} sin conexión · ${formatTime(clientTime, status.employee.tz)}`,
         message:
           "Se enviará a Odoo en cuanto recuperes señal. Abre la app cuando tengas datos y no cierres sesión.",
       });
     },
-    [action, status],
+    [status],
   );
 
   const send = useCallback(
-    async (photo: string | null) => {
+    async (photo: string | null, intent: Intent) => {
       if (!status) return;
       // La hora del registro es la del momento en que se pulsó / tomó la selfie
       const deviceNow = Date.now();
@@ -117,7 +157,7 @@ export default function InicioPage() {
       try {
         // Sin red, o con registros anteriores aún por enviar (hay que respetar el orden)
         if (!online || !navigator.onLine || pending.length > 0) {
-          await enqueue(uuid, photo, coords, deviceNow);
+          await enqueue(intent, uuid, photo, coords, deviceNow);
           if (online && navigator.onLine) syncNow();
           return;
         }
@@ -125,7 +165,9 @@ export default function InicioPage() {
         try {
           const res = await apiFetch<PunchResponse>("/punch", {
             body: {
-              action,
+              action: intent.action,
+              reason: intent.reason ?? null,
+              reason_note: intent.reason_note ?? null,
               client_uuid: uuid,
               latitude: coords?.latitude ?? null,
               longitude: coords?.longitude ?? null,
@@ -135,10 +177,7 @@ export default function InicioPage() {
           });
           setStatus(res);
           const hour = formatTime(res.time, res.employee.tz);
-          const label =
-            res.action_done === "check_in"
-              ? "Entrada registrada"
-              : "Salida registrada";
+          const label = DONE_LABELS[res.action_done] ?? "Registro guardado";
           setNotice(
             res.feedback
               ? {
@@ -154,7 +193,7 @@ export default function InicioPage() {
             // Se cayó la señal: se guarda con el mismo uuid. Si Odoo sí lo
             // alcanzó a recibir, al sincronizar responde con el existente.
             markOffline();
-            await enqueue(uuid, photo, coords, deviceNow);
+            await enqueue(intent, uuid, photo, coords, deviceNow);
           } else if (err instanceof ApiError && err.code === "state_mismatch") {
             // Ya se había registrado (doble toque u otro dispositivo): se refresca la pantalla
             setStatus(err.data as Status);
@@ -176,33 +215,49 @@ export default function InicioPage() {
         });
       } finally {
         positionRef.current = null;
+        intentRef.current = null;
         setStep("idle");
       }
     },
-    [
-      action,
-      status,
-      online,
-      pending.length,
-      enqueue,
-      syncNow,
-      setStatus,
-      markOffline,
-    ],
+    [status, online, pending.length, enqueue, syncNow, setStatus, markOffline],
   );
 
-  const start = () => {
-    if (!status || busy) return;
+  /** Pide el GPS y, si la acción la lleva, la selfie; luego envía. */
+  const begin = (intent: Intent) => {
+    if (!status) return;
     setNotice(null);
     positionRef.current = status.gps_required
       ? getPosition()
       : Promise.resolve(null);
-    if (status.require_selfie) setStep("camera");
-    else send(null);
+    if (status.require_selfie && needsSelfie(intent.action)) {
+      intentRef.current = intent;
+      setStep("camera");
+    } else send(null, intent);
   };
+
+  const onMain = () => {
+    if (!status || busy) return;
+    begin({ action: mainAction });
+  };
+
+  const onLunchStart = () => {
+    if (!status || busy || !checkedIn) return;
+    begin({ action: "break_start", reason: "lunch" });
+  };
+
+  /** Salida temporal (tienda, personal, …): primero el motivo. */
+  const onExitStart = () => {
+    if (!status || busy || !checkedIn) return;
+    setNotice(null);
+    setStep("reason");
+  };
+
+  const confirmReason = (reason: string, note: string | null) =>
+    begin({ action: "break_start", reason, reason_note: note });
 
   const cancelCamera = useCallback(() => {
     positionRef.current = null;
+    intentRef.current = null;
     setStep("idle");
   }, []);
 
@@ -232,6 +287,7 @@ export default function InicioPage() {
     );
   }
 
+  const pendingReview = status.pending_review ?? 0;
   const entrada = formatTime(status.today.first_check_in, tz);
   const salida = formatTime(status.today.last_check_out, tz);
   const busyLabel =
@@ -260,7 +316,9 @@ export default function InicioPage() {
                 className={`inline-flex items-center gap-2 rounded-full border px-4 py-1.5 font-bold text-[12px] uppercase tracking-[0.1em] ${
                   checkedIn
                     ? "border-ok/30 bg-ok/10 text-ok"
-                    : "border-line bg-ink-800 text-white/75"
+                    : onBreak
+                      ? "border-warn/30 bg-warn/10 text-warn"
+                      : "border-line bg-ink-800 text-white/75"
                 }`}
               >
                 <span className="relative flex size-2">
@@ -268,12 +326,14 @@ export default function InicioPage() {
                     <span className="absolute inset-0 animate-ping rounded-full bg-ok opacity-70" />
                   )}
                   <span
-                    className={`relative size-2 rounded-full ${checkedIn ? "bg-ok" : "bg-subtle"}`}
+                    className={`relative size-2 rounded-full ${checkedIn ? "bg-ok" : onBreak ? "bg-warn" : "bg-subtle"}`}
                   />
                 </span>
                 {checkedIn
                   ? `En turno desde ${formatTime(status.check_in, tz)}`
-                  : "Fuera de turno"}
+                  : onBreak
+                    ? `${onLunch ? "En comida" : `Fuera: ${status.break_reason_label ?? reasonLabel(status.break_reason, status.out_reasons)}`} desde ${formatTime(status.break_since ?? status.last_check_out, tz)}`
+                    : "Fuera de turno"}
               </span>
             </div>
 
@@ -291,7 +351,7 @@ export default function InicioPage() {
               )}
               <button
                 type="button"
-                onClick={start}
+                onClick={onMain}
                 disabled={busy}
                 className={`relative flex size-[176px] flex-col md:size-[208px] items-center justify-center gap-3 rounded-full transition active:scale-[0.97] disabled:cursor-wait ${
                   checkedIn
@@ -310,24 +370,74 @@ export default function InicioPage() {
                   <>
                     {checkedIn ? (
                       <LogOut className="size-8" strokeWidth={2.2} />
+                    ) : onBreak ? (
+                      onLunch ? (
+                        <Utensils className="size-8" strokeWidth={2.2} />
+                      ) : (
+                        <DoorOpen className="size-8" strokeWidth={2.2} />
+                      )
                     ) : (
                       <LogIn className="size-8" strokeWidth={2.2} />
                     )}
                     <span className="font-black text-[17px] uppercase tracking-[0.16em]">
-                      {checkedIn ? "Check out" : "Check in"}
+                      {checkedIn
+                        ? "Check out"
+                        : onBreak
+                          ? "Regresar"
+                          : "Check in"}
                     </span>
+                    {onLunch && (
+                      <span className="-mt-2 font-bold text-[11px] uppercase tracking-[0.16em] opacity-75">
+                        de comer
+                      </span>
+                    )}
                   </>
                 )}
               </button>
             </div>
 
-            <p className="mx-auto mt-4 flex max-w-[260px] items-start justify-center gap-1.5 text-center text-[13px] text-muted leading-snug">
+            {checkedIn && (
+              <div className="mt-5 flex flex-wrap justify-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={onLunchStart}
+                  disabled={busy}
+                  className="inline-flex items-center gap-2 rounded-full border border-warn/40 bg-warn/10 px-4 py-2.5 font-bold text-[12px] text-warn uppercase tracking-[0.12em] transition active:scale-[0.97] disabled:opacity-40"
+                >
+                  <Utensils className="size-4" />
+                  Comer
+                </button>
+                <button
+                  type="button"
+                  onClick={onExitStart}
+                  disabled={busy}
+                  className="inline-flex items-center gap-2 rounded-full border border-warn/40 bg-warn/10 px-4 py-2.5 font-bold text-[12px] text-warn uppercase tracking-[0.12em] transition active:scale-[0.97] disabled:opacity-40"
+                >
+                  <DoorOpen className="size-4" />
+                  Salida
+                </button>
+              </div>
+            )}
+
+            <p className="mx-auto mt-4 flex max-w-[280px] items-start justify-center gap-1.5 text-center text-[13px] text-muted leading-snug">
               {status.gps_required && (
                 <MapPin className="mt-0.5 size-3.5 shrink-0" />
               )}
-              Se registrará tu hora{status.gps_required ? " y ubicación" : ""}
-              {status.require_selfie ? " con una selfie" : ""} al marcar{" "}
-              {checkedIn ? "salida" : "entrada"}.
+              {onBreak ? (
+                <>
+                  Tu tiempo está en pausa. Marca tu regreso para seguir contando
+                  horas{status.gps_required ? " (solo ubicación)" : ""}.
+                </>
+              ) : (
+                <>
+                  Se registrará tu hora
+                  {status.gps_required ? " y ubicación" : ""}
+                  {status.require_selfie ? " con una selfie" : ""} al marcar{" "}
+                  {checkedIn ? "salida" : "entrada"}.
+                  {checkedIn &&
+                    " Si sales un momento (comer, tienda…) usa Comer o Salida: tu tiempo se pausa hasta que regreses."}
+                </>
+              )}
             </p>
           </div>
 
@@ -338,12 +448,31 @@ export default function InicioPage() {
             </p>
             {(notice ||
               syncNotice ||
+              pendingReview > 0 ||
               pending.length > 0 ||
               rejected.length > 0) && (
               <div className="mt-5 space-y-3 lg:order-last lg:mt-6">
                 {notice && <Notice notice={notice} onClose={closeNotice} />}
                 {syncNotice && (
                   <Notice notice={syncNotice} onClose={clearSyncNotice} />
+                )}
+
+                {pendingReview > 0 && (
+                  <div className="flex gap-3 rounded-2xl border border-warn/30 bg-warn/10 px-4 py-3.5">
+                    <ClipboardList className="mt-0.5 size-5 shrink-0 text-warn" />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-[14px] text-warn">
+                        {pendingReview === 1
+                          ? "1 registro en revisión"
+                          : `${pendingReview} registros en revisión`}
+                      </p>
+                      <p className="mt-0.5 text-[12px] text-white/75 leading-snug">
+                        No marcaste tu check out o tu regreso y el sistema cerró
+                        tu jornada a medianoche. Recursos Humanos corregirá la
+                        hora real.
+                      </p>
+                    </div>
+                  </div>
                 )}
 
                 {pending.length > 0 && (
@@ -386,7 +515,7 @@ export default function InicioPage() {
                     <CloudOff className="mt-0.5 size-5 shrink-0 text-bad" />
                     <div className="min-w-0 flex-1">
                       <p className="font-bold text-[14px] text-bad">
-                        {r.action === "check_in" ? "Entrada" : "Salida"} del{" "}
+                        {actionLabel(r.action)} del{" "}
                         {formatTime(r.client_time, tz)} no se aceptó
                       </p>
                       <p className="mt-0.5 text-[12px] text-white/75 leading-snug">
@@ -436,11 +565,25 @@ export default function InicioPage() {
         </div>
       </section>
 
+      {step === "reason" && (
+        <ReasonSheet
+          reasons={status.out_reasons}
+          onCancel={cancelCamera}
+          onConfirm={confirmReason}
+        />
+      )}
+
       {step === "camera" && (
         <SelfieCamera
-          title={checkedIn ? "Registrar salida" : "Registrar entrada"}
+          title={
+            intentRef.current?.action === "check_out"
+              ? "Registrar salida"
+              : "Registrar entrada"
+          }
           onCancel={cancelCamera}
-          onConfirm={(photo) => send(photo)}
+          onConfirm={(photo) =>
+            send(photo, intentRef.current ?? { action: mainAction })
+          }
         />
       )}
     </>

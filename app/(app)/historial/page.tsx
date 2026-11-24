@@ -5,12 +5,15 @@ import {
   Camera,
   CloudOff,
   CloudUpload,
+  DoorOpen,
   Loader2,
+  Utensils,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { TopBar } from "../../components/TopBar";
 import { ApiError, apiFetch } from "../../lib/api";
 import {
+  actionLabel,
   dayKey,
   formatDayLabel,
   formatHours,
@@ -159,7 +162,7 @@ export default function HistorialPage() {
                   >
                     <div className="min-w-0 flex-1">
                       <p className="font-extrabold text-[16px] text-white tabular-nums">
-                        {p.action === "check_in" ? "Entrada" : "Salida"} ·{" "}
+                        {actionLabel(p.action)} ·{" "}
                         {formatTime(p.client_time, tz)}
                       </p>
                       <p className="mt-0.5 text-[12px] text-muted">
@@ -249,6 +252,28 @@ function Row({ record: r, tz }: { record: HistoryRecord; tz?: string }) {
               {b.label}
             </span>
           ))}
+          {r.out_reason === "lunch" && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-warn/25 bg-warn/10 px-2 py-0.5 font-bold text-[10px] text-warn uppercase tracking-[0.08em]">
+              <Utensils className="size-3" /> Comida
+            </span>
+          )}
+          {r.out_reason && r.out_reason !== "lunch" && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-warn/25 bg-warn/10 px-2 py-0.5 font-bold text-[10px] text-warn uppercase tracking-[0.08em]">
+              <DoorOpen className="size-3" /> Salida:{" "}
+              {r.out_reason_label ?? r.out_reason}
+              {r.out_reason_note ? `: ${r.out_reason_note}` : ""}
+            </span>
+          )}
+          {r.auto_closed && (
+            <span className="rounded-full border border-bad/30 bg-bad/10 px-2 py-0.5 font-bold text-[10px] text-bad uppercase tracking-[0.08em]">
+              Sin salida · cierre 23:59
+            </span>
+          )}
+          {r.review_state === "to_review" && (
+            <span className="rounded-full border border-warn/25 bg-warn/10 px-2 py-0.5 font-bold text-[10px] text-warn uppercase tracking-[0.08em]">
+              Por revisión
+            </span>
+          )}
           {(r.in_offline || r.out_offline) && (
             <span className="inline-flex items-center gap-1 rounded-full border border-warn/25 bg-warn/10 px-2 py-0.5 font-bold text-[10px] text-warn uppercase tracking-[0.08em]">
               <CloudOff className="size-3" /> Sin conexión
