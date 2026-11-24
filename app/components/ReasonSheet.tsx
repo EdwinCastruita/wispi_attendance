@@ -7,7 +7,7 @@ import type { OutReason } from "../lib/types";
 // Respaldo si el estado en caché viene de una versión anterior de Odoo
 export const DEFAULT_OUT_REASONS: OutReason[] = [
   { value: "lunch", label: "Salida a comer" },
-  { value: "errand", label: "Tienda / mandado" },
+  { value: "errand", label: "Tienda" },
   { value: "personal", label: "Asunto personal" },
   { value: "field_visit", label: "Comisión / visita a cliente" },
   { value: "medical", label: "Médico" },
